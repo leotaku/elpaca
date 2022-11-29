@@ -1578,11 +1578,15 @@ If PROMPT is non-nil, it is used instead of the default."
            nil t)))
 
 ;;;###autoload
-(defun elpaca-rebuild (item &optional hide)
+(defun elpaca-rebuild (item &optional hide scratch)
   "Rebuild ITEM's associated package.
 When called interactively, prompt for ITEM.
 With a prefix argument, rebuild current file's package or prompt if none found.
+
+When SCRATCH is non-nil, cloning, ref checkout, etc...
+
 If HIDE is non-nil, do not display `elpaca-log-buffer'."
+  ;;@TODO: scratch via prefix-arg?
   (interactive (list (or (and-let* ((current-prefix-arg)
                                     (queued (elpaca--file-package))
                                     ((car queued))))
@@ -1590,16 +1594,17 @@ If HIDE is non-nil, do not display `elpaca-log-buffer'."
   (let* ((queued (assoc item (elpaca--queued)))
          (e (cdr queued)))
     (unless e (user-error "Package %S is not queued" item))
-    (when (eq (elpaca--status e) 'finished)
+    (when (or scratch (eq (elpaca--status e) 'finished))
       ;;@MAYBE: remove Info/load-path entries?
       (setf (elpaca<-build-steps e)
             (cl-set-difference (elpaca--build-steps (elpaca<-recipe e) nil nil nil)
-                               '(elpaca--clone
-                                 elpaca--add-remotes
-                                 elpaca--fetch
-                                 elpaca--checkout-ref
-                                 elpaca--clone-dependencies
-                                 elpaca--activate-package))))
+                               (append (unless scratch
+                                         '(elpaca--clone
+                                           elpaca--add-remotes
+                                           elpaca--fetch
+                                           elpaca--checkout-ref
+                                           elpaca--clone-dependencies))
+                                       '(elpaca--activate-package)))))
     (elpaca--update-info e "Rebuilding" 'rebuilding)
     (setq elpaca-cache-autoloads nil)
     (setf (elpaca<-queue-time e) (current-time))
