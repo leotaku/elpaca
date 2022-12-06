@@ -28,6 +28,9 @@
   :type 'string)
 (make-variable-buffer-local 'elpaca-ui-default-query)
 
+(defvar-local elpaca-ui--marked-packages nil
+  "List of marked packages. Each element is a cons of (PACKAGE . ACTION).")
+
 (defcustom elpaca-ui-actions
   '((delete  :prefix "💀" :face (:inherit default :weight bold :foreground "#FF0022")
              :action (lambda (i) (elpaca-delete i 'force 'deps)))
@@ -43,39 +46,142 @@
   "List of actions which can be taken on packages."
   :type 'list)
 
+(defun elpaca-ui--entry-name (entry)
+  "Return tabulated-list ENTRY's name."
+  (aref (cadr entry) 0))
+
+(defun elpaca-ui--unique (entries)
+  "Return most recent log event for each package in ENTRIES."
+  (cl-remove-duplicates entries :key #'elpaca-ui--entry-name :from-end t :test #'equal))
+
+(defun elpaca-ui--dirty (entries)
+  "Return ENTRIES for which the associated package has uncomitted work."
+  (cl-remove-if-not #'elpaca-worktree-dirty-p entries :key #'elpaca-ui--entry-name :test #'equal))
+
+(defun elpaca-ui--declared (entries)
+  "Return ENTRIES which were declared during init."
+  (cl-remove-if-not (lambda (it) (elpaca-declared-p (intern it))) entries :key #'elpaca-ui--entry-name))
+
+(defun elpaca-ui--orphan (_)
+  "Return `elpaca-builds-directory' subdirectories with no associated packages."
+  (cl-loop with dirs = (cl-set-difference
+                        (cl-remove-if-not
+                         #'file-directory-p
+                         (nthcdr 2 (directory-files elpaca-builds-directory t)))
+                        (mapcar (lambda (q) (elpaca<-build-dir (cdr q))) (elpaca--queued))
+                        :test #'equal)
+           with i = 0
+           for dir in dirs
+           for name = (file-name-base dir)
+           collect (list (cl-incf i) (vector (propertize name 'orphan-dir dir)
+                                             "orphan package" "n/a" "n/a" "n/a"))))
+
+(defun elpaca-ui--installed (entries)
+  "Return ENTRIES which satisfy `elpaca-installed-p'."
+  (cl-remove-if-not (lambda (n) (elpaca-installed-p (intern n))) entries :key #'elpaca-ui--entry-name))
+
+(defun elpaca-ui--marked (entries)
+  "Return Marked ENTRIES."
+  (cl-loop
+   for (item . _) in elpaca-ui--marked-packages
+   for name = (symbol-name item)
+   collect (cl-some (lambda (entry) (eq name (elpaca-ui--entry-name entry))) entries)))
+
+(defun elpaca-ui--random (entries &optional limit)
+  "Return random ENTRIES up to LIMIT."
+  (let ((limit (or limit 10))
+        (max (length entries)))
+    (if (< max limit)
+        (prog1 entries
+          (message "entries available less than limit: %d" limit))
+      (cl-loop with (results seen)
+               until (= (length results) limit)
+               for n = (random (length entries))
+               unless (memq n seen) do (push (nth n entries) results)
+               (push n seen)
+               finally return results))))
+
+(defun elpaca-ui--byte-comp-warnings (entries)
+  "Buttonize byte comp warnings in ENTRIES."
+  (mapcar
+   (lambda (entry)
+     (if-let ((cols (cadr entry))
+              ((equal (aref cols 1) "byte-compilation"))
+              (copy (copy-tree entry))
+              (info (aref (cadr copy) 2))
+              (e (get-text-property (point-min) 'elpaca (aref (cadr copy) 0))))
+         (progn
+           (when (string-match-p "\\(?:Error\\|Warning\\):" info)
+             (setf (aref (cadr copy) 2) (propertize info 'face 'elpaca-failed)))
+           (when (string-match "\\(?:\\([^z-a]*?\\):\\([[:digit:]]+?\\):\\([[:digit:]]*?\\)\\):" info)
+             (let ((file (match-string 1 (aref (cadr copy) 2)))
+                   (line  (match-string 2 (aref (cadr copy) 2)))
+                   (col (match-string 3 (aref (cadr copy) 2))))
+               (setf (aref (cadr copy) 2)
+                     (replace-match
+                      (elpaca-ui--buttonize
+                       (propertize (string-join (list file col line) ":") 'face nil)
+                       (lambda (&rest _)
+                         (elpaca-ui--visit-byte-comp-warning
+                          (expand-file-name file (elpaca<-build-dir e))
+                          (string-to-number line)
+                          (string-to-number col))))
+                      nil nil (aref (cadr copy) 2)))))
+           copy)
+       entry))
+   entries))
+
+(defun elpaca-ui--commit-info (entries)
+  "Apply faces to commit info in ENTRIES."
+  (cl-loop with desc = t
+           for entry in entries
+           collect
+           (if-let (((equal (aref (cadr entry) 1) "update-log"))
+                    (copy (copy-tree entry))
+                    (e (get-text-property (point-min) 'elpaca (aref (cadr copy) 0)))
+                    (repo (elpaca<-repo-dir e))
+                    (cols (cadr copy))
+                    (info (aref cols 2))
+                    ((not (equal info "Update Log"))))
+               (progn
+                 (setf (aref (cadr copy) 2)
+                       (cond
+                        ((string-match "\\(?:^commit \\([^z-a]*\\)$\\)" info)
+                         (setq desc t)
+                         (concat (propertize "commit" 'face '(:weight bold))
+                                 " "
+                                 (if (fboundp 'magit-show-commit)
+                                     (elpaca-ui--buttonize (match-string 1 info)
+                                                           (lambda (rev)
+                                                             (let ((default-directory repo))
+                                                               (magit-show-commit rev)))
+                                                           (car (split-string (match-string 1 info) " ")))
+                                   (match-string 1 info))))
+                        ((string-match "\\(?:^\\([^[:space:]][[:alpha:]]+:\\)\\([^z-a]*?$\\)\\)" info)
+                         (when (string-match-p "Date" info) (setq desc nil))
+                         (concat (propertize (match-string 1 info) 'face '(:weight bold))
+                                 (match-string 2 info)))
+                        ((eq desc t) (propertize info 'face 'elpaca-finished))
+                        (t info)))
+                 copy)
+             entry)))
+
+(defun elpaca-ui--pretty (entries)
+  "Return contextually highlighted, buttonized ENTRIES."
+  (elpaca-ui--commit-info (elpaca-ui--byte-comp-warnings entries)))
+
 (defcustom elpaca-ui-search-tags
-  '((dirty     . (lambda (items) (cl-remove-if-not #'elpaca-worktree-dirty-p items :key #'car)))
-    (declared  . (lambda (items) (cl-remove-if-not #'elpaca-declared-p items :key #'car)))
-    (orphan    . (lambda (items) (mapcar
-                                  (lambda (dir)
-                                    (let ((name (file-name-base dir)))
-                                      (list (intern name)
-                                            (vector (propertize name 'orphan-dir dir)
-                                                    "orphan package" "n/a" "n/a" "n/a"))))
-                                  (cl-set-difference
-                                   (cl-remove-if-not
-                                    #'file-directory-p
-                                    (nthcdr 2 (directory-files elpaca-builds-directory t)))
-                                   (mapcar (lambda (q) (elpaca<-build-dir (cdr q))) (elpaca--queued))
-                                   :test #'equal))))
-    (unique    . (lambda (items) (cl-remove-duplicates items :key #'car :from-end t)))
+  '((dirty     . elpaca-ui--dirty)
+    (declared  . elpaca-ui--declared)
+    (orphan    . elpaca-ui--oprhan)
+    (unique    . elpaca-ui--unique)
+    ;;@MAYBE: Set these two buffer local in log buffer.
     (rebuild   . elpaca-log--build-entries)
-    (latest    . (lambda (items) (butlast (reverse (sort (copy-tree items) #'elpaca-log--sort-chronologically))
-                                          elpaca-ui--prev-entry-count)))
-    (linked-errors . elpaca-ui--byte-comp-warnings)
-    (update-log . elpaca-ui--commit-info)
-    (random    . (lambda (items &optional limit)
-                   (if (< (length items) (or limit 10))
-                       items
-                     (cl-loop with (results seen)
-                              until (= (length results) (or limit 10))
-                              for n = (random (length items))
-                              unless (memq n seen) do (push (nth n items) results)
-                              (push n seen)
-                              finally return results))))
-    (installed . (lambda (items) (cl-remove-if-not #'elpaca-installed-p items :key #'car)))
-    (marked    . (lambda (items) (cl-loop for (item . _) in elpaca-ui--marked-packages
-                                          collect (assoc item items)))))
+    (latest    . elpaca-log--latest-entries)
+    (pretty    . elpaca-ui--pretty)
+    (random    . elpaca-ui--random)
+    (installed . elpaca-ui--installed)
+    (marked    . elpaca-ui--marked))
   "Alist of search tags.
 Each cell is of form (NAME FILTER).
 FILTER must be a unary function which takes a list of menu items and returns a
@@ -110,9 +216,6 @@ exclamation point to it. e.g. #!installed."
 
 ;;;; Variables:
 (defvar-local elpaca-ui--search-timer nil "Timer to debounce search input.")
-(defvar-local elpaca-ui--marked-packages nil
-  "List of marked packages. Each element is a cons of (PACKAGE . ACTION).")
-(defvar-local elpaca-ui--prev-entry-count nil "Number of previously recored entries.")
 (defvar elpaca-ui-mode-map (let ((m (make-sparse-keymap)))
                              (define-key m (kbd "!") 'elpaca-ui-send-input)
                              (define-key m (kbd "I") (elpaca-defsearch 'installed "#unique #installed"))
@@ -369,7 +472,7 @@ ID and COLS mandatory args to fulfill `tabulated-list-printer' API."
                          line)))
              (lines (cl-loop for i below (length tabulated-list-entries)
                              for entry = (nth i tabulated-list-entries)
-                             when (eq (car entry) item) collect i)))
+                             when (equal (aref (cadr entry) 0) name) collect i)))
     (save-excursion
       (with-silent-modifications
         (cl-loop with marked = (cl-find item elpaca-ui--marked-packages :key #'car)
@@ -450,7 +553,9 @@ If SILENT is non-nil, supress update message."
 
 (defun elpaca-ui-current-package ()
   "Return current package of UI line."
-  (or (get-text-property (point) 'tabulated-list-id) (user-error "No package at point")))
+  (if-let ((entry (tabulated-list-get-entry)))
+      (intern (aref entry 0))
+    (user-error "No package at point")))
 
 (defun elpaca-ui-browse-package ()
   "Browse current package's URL via `browse-url'."
@@ -568,8 +673,8 @@ The current package is its sole argument."
 (defun elpaca-ui-send-input ()
   "Send input string to current process."
   (interactive)
-  (if-let ((id (get-text-property (point) 'tabulated-list-id))
-           (e (alist-get id (elpaca--queued)))
+  (if-let ((entry (tabulated-list-get-entry))
+           (e (get-text-property 0 'elpaca (aref entry 0)))
            (process (elpaca<-process e))
            ((process-live-p process)))
       (let* ((input (read-string (format "Send input to %S: " (process-name process)))))
@@ -583,72 +688,6 @@ The current package is its sole argument."
   (goto-char (point-min))
   (forward-line (1- line))
   (move-to-column (1- col)))
-
-(defun elpaca-ui--byte-comp-warnings (entries)
-  "Buttonize byte comp warnings in ENTRIES."
-  (mapcar
-   (lambda (entry)
-     (if-let ((cols (cadr entry))
-              ((equal (aref cols 1) "byte-compilation"))
-              (copy (copy-tree entry))
-              (info (aref (cadr copy) 2))
-              (e (get-text-property (point-min) 'elpaca (aref (cadr copy) 0))))
-         (progn
-           (when (string-match-p "\\(?:Error\\|Warning\\):" info)
-             (setf (aref (cadr copy) 2) (propertize info 'face 'elpaca-failed)))
-           (when (string-match "\\(?:\\([^z-a]*?\\):\\([[:digit:]]+?\\):\\([[:digit:]]*?\\)\\):" info)
-             (let ((file (match-string 1 (aref (cadr copy) 2)))
-                   (line  (match-string 2 (aref (cadr copy) 2)))
-                   (col (match-string 3 (aref (cadr copy) 2))))
-               (setf (aref (cadr copy) 2)
-                     (replace-match
-                      (elpaca-ui--buttonize
-                       (propertize (string-join (list file col line) ":") 'face nil)
-                       (lambda (&rest _)
-                         (elpaca-ui--visit-byte-comp-warning
-                          (expand-file-name file (elpaca<-build-dir e))
-                          (string-to-number line)
-                          (string-to-number col))))
-                      nil nil (aref (cadr copy) 2)))))
-           copy)
-       entry))
-   entries))
-
-(defun elpaca-ui--commit-info (entries)
-  "Apply faces to commit info in ENTRIES."
-  (cl-loop with desc = t
-           for entry in entries
-           collect
-           (if-let (((equal (aref (cadr entry) 1) "update-log"))
-                    (copy (copy-tree entry))
-                    (e (get-text-property (point-min) 'elpaca (aref (cadr copy) 0)))
-                    (repo (elpaca<-repo-dir e))
-                    (cols (cadr copy))
-                    (info (aref cols 2))
-                    ((not (equal info "Update Log"))))
-               (progn
-                 (setf (aref (cadr copy) 2)
-                       (cond
-                        ((string-match "\\(?:^commit \\([^z-a]*\\)$\\)" info)
-                         (setq desc t)
-                         (concat (propertize "commit" 'face '(:weight bold))
-                                 " "
-                                 (if (fboundp 'magit-show-commit)
-                                     (elpaca-ui--buttonize (match-string 1 info)
-                                                           (lambda (rev)
-                                                             (let ((default-directory repo))
-                                                               (magit-show-commit rev)))
-                                                           (car (split-string (match-string 1 info) " ")))
-                                   (match-string 1 info))))
-                        ((string-match "\\(?:^\\([^[:space:]][[:alpha:]]+:\\)\\([^z-a]*?$\\)\\)" info)
-                         (when (string-match-p "Date" info) (setq desc nil))
-                         (concat (propertize (match-string 1 info) 'face '(:weight bold))
-                                 (match-string 2 info)))
-                        ((eq desc t) (propertize info 'face 'elpaca-finished))
-
-                        (t info)))
-                 copy)
-             entry)))
 
 (provide 'elpaca-ui)
 ;;; elpaca-ui.el ends here

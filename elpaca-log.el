@@ -37,14 +37,15 @@
   "Return log's `tabulated-list-entries'."
   (cl-loop
    with queue-time = (elpaca-q<-time (car (last elpaca--queues)))
-   for (item . p) in (elpaca--queued)
-   for log = (elpaca<-log p)
-   for package = (elpaca<-package p)
+   with i = 0
+   for (_ . e) in (elpaca--queued)
+   for log = (elpaca<-log e)
+   for package = (elpaca<-package e)
    append
    (cl-loop for (status time info) in log
             for delta = (format-time-string "%02s.%6N" (time-subtract time queue-time))
-            collect (list item (vector pkg (symbol-name status) info delta)))))
             for pkg = (propertize package 'face (elpaca-alist-get status elpaca-status-faces 'default) 'elpaca e)
+            collect (list (cl-incf i) (vector pkg (symbol-name status) info delta)))))
 
 (defun elpaca-log--build-entries (entries)
   "Return a list of ENTRIES filtered to last builds."
@@ -55,25 +56,28 @@
            for package = (symbol-name id)
            for e = (elpaca-alist-get id queued)
            for log = (elpaca<-log e)
-           for events =
-           (cl-loop
-            for (status time info) in log
-            until (eq status 'rebuilding)
-            collect
-            (list id (vector pkg (symbol-name status) info
-                             (format-time-string
-                              "%02s.%6N" (time-subtract time queue-time)))))
+           for events = (cl-loop
+                         for (status time info) in log until (eq status 'rebuilding)
+                         for delta = (format-time-string "%02s.%6N" (time-subtract time queue-time))
                          for pkg = (propertize package 'face (elpaca-alist-get status elpaca-status-faces 'default) 'elpaca e)
+                         collect (list id (vector pkg (symbol-name status) info delta)))
            unless (eq (length events) (length log))
            append events))
+
+(defvar-local elpaca-log--prev-entry-count nil "Number of previously recored entries.")
+
+(defun elpaca-log--latest-entries (entries)
+  "Return latest log ENTRIES."
+  (butlast (reverse (sort (copy-tree entries) #'elpaca-log--sort-chronologically))
+                                          elpaca-log--prev-entry-count))
 
 ;;;###autoload
 (defun elpaca-log--latest ()
   "Log latest activity."
   (elpaca-log)
   (with-current-buffer elpaca-log-buffer
-    (setq elpaca-ui--prev-entry-count (length (funcall elpaca-ui-entries-function)))
-    (elpaca-log "#latest #linked-errors")))
+    (setq elpaca-log--prev-entry-count (length (funcall elpaca-ui-entries-function)))
+    (elpaca-log "#latest #pretty")))
 
 (defun elpaca-log--sort-chronologically (a b)
   "Sort entries A and B chronologically."
