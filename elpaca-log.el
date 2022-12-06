@@ -26,6 +26,7 @@
 (require 'elpaca-ui)
 (defvar elpaca-log-buffer "*elpaca-log*")
 (defvar elpaca-log--history nil "`elpaca-log' minibuffer history.")
+(defvar elpaca-status-faces)
 
 (defcustom elpaca-log-default-search-query ".*"
   "Default query for `elpaca-log-buffer'."
@@ -42,8 +43,8 @@
    append
    (cl-loop for (status time info) in log
             for delta = (format-time-string "%02s.%6N" (time-subtract time queue-time))
-            for pkg = (propertize package 'face (elpaca--status-face status) 'elpaca p)
             collect (list item (vector pkg (symbol-name status) info delta)))))
+            for pkg = (propertize package 'face (elpaca-alist-get status elpaca-status-faces 'default) 'elpaca e)
 
 (defun elpaca-log--build-entries (entries)
   "Return a list of ENTRIES filtered to last builds."
@@ -58,12 +59,11 @@
            (cl-loop
             for (status time info) in log
             until (eq status 'rebuilding)
-            for pkg =
-            (propertize package 'face (elpaca--status-face status) 'elpaca e)
             collect
             (list id (vector pkg (symbol-name status) info
                              (format-time-string
                               "%02s.%6N" (time-subtract time queue-time)))))
+                         for pkg = (propertize package 'face (elpaca-alist-get status elpaca-status-faces 'default) 'elpaca e)
            unless (eq (length events) (length log))
            append events))
 
