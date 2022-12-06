@@ -53,7 +53,7 @@
            with queued = (elpaca--queued)
            for id in ids
            for package = (symbol-name id)
-           for e = (alist-get id queued)
+           for e = (elpaca-alist-get id queued)
            for log = (elpaca<-log e)
            for events =
            (cl-loop
