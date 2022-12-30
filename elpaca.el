@@ -645,6 +645,7 @@ If REPLACE is non-nil, the most recent log entry is replaced."
     (with-current-buffer log
       (elpaca-ui--update-search-filter log))))
 
+(defvar elpaca--waiting nil "Non-nil when `elpaca-wait' is polling.")
 (defun elpaca--update-info (e info &optional status replace)
   "Update E's INFO.
 Print the elpaca status line in `elpaca-log-buffer'.
@@ -663,9 +664,11 @@ If REPLACE is non-nil, E's log is updated instead of appended."
     (when (eq status 'failed) (elpaca-log "#unique !finished")))
   (when info (elpaca--log-event e info replace))
   (when elpaca--info-timer (cancel-timer elpaca--info-timer))
-  (setq elpaca--info-timer
-        (run-at-time elpaca-info-timer-interval nil #'elpaca--update-log-buffer))
-  nil)
+  (if elpaca--waiting ; Don't wait. We're already polling via sit-for
+      (elpaca--update-log-buffer)
+    (setq elpaca--info-timer
+          (run-at-time elpaca-info-timer-interval nil #'elpaca--update-log-buffer))
+    nil))
 
 (defun elpaca--log-duration (e)
   "Return E's log duration."
@@ -711,9 +714,9 @@ Accepted KEYS are :pre and :post which are hooks run around queue processing."
            do (condition-case-unless-debug err
                   (eval `(progn ,@body) t)
                 ((error) (warn "Package Config Error %s: %S" item err))))
-  (setf (elpaca-q<-status q) 'complete)
   (let ((next (nth (1+ (elpaca-q<-id q)) (reverse elpaca--queues))))
     (if (and (null elpaca-after-init-time)
+             (null elpaca--waiting)
              (eq (elpaca-q<-type q) 'init)
              (or (null next)
                  (not (eq (elpaca-q<-type next) 'init))))
@@ -723,7 +726,8 @@ Accepted KEYS are :pre and :post which are hooks run around queue processing."
           (elpaca-split-queue))
       (when-let ((post (elpaca-q<-post q))) (funcall post))
       (run-hooks 'elpaca-post-queue-hook)
-      (when next (elpaca--process-queue next)))))
+      (when next (elpaca--process-queue next))
+      (setf (elpaca-q<-status q) 'complete))))
 
 (defun elpaca--finalize (e)
   "Declare E finished or failed."
@@ -1462,6 +1466,38 @@ The expansion is a string indicating the package has been disabled."
                          (cadr feature)
                        (elpaca--first order))
                     ,@body)))))
+
+(defcustom elpaca-wait-poll-interval 0.001 "Seconds to wait between `elpaca-wait' status checks."
+  :type 'number)
+
+(defun elpaca-wait (&optional _n)
+  "Synchronously process current queues.
+If N is non-nil, timeout after N seconds.
+This will block user input (spare \\[keyboard-quit] to quit)."
+  (when-let ((q (cl-find-if (lambda (q) (and (eq (elpaca-q<-status q) 'incomplete)
+                                             (or (elpaca-q<-elpacas q) (elpaca-q<-forms q))))
+                            elpaca--queues)))
+    (setq elpaca--waiting t)
+    (elpaca-log "#unique !finished")
+    (let* ((processed (elpaca-q<-processed q))
+           (id (elpaca-q<-id q))
+           (previous -1)
+           (formatter (substitute-command-keys
+                       (concat "waiting on queue " (number-to-string id)
+                               "...%2.f%%. \\[keyboard-quit] to quit")
+                       'no-face)))
+      (elpaca-process-queues)
+      (unwind-protect ;@TODO: check for elpaca-after-init hook?
+          (while (not (eq (elpaca-q<-status q) 'complete))
+            (unless (= previous (setq processed (elpaca-q<-processed q)))
+              (message formatter (* 100 (/ processed
+                                           (float (length (elpaca-q<-elpacas q)))))))
+            (setq previous processed)
+            (discard-input)
+            (sit-for elpaca-wait-poll-interval))
+        (elpaca-split-queue)
+        (message formatter 100.0)
+        (setq elpaca--waiting nil)))))
 
 (defvar elpaca--try-package-history nil "History for `elpaca-try'.")
 (declare-function elpaca-log--latest "elpaca-log")
