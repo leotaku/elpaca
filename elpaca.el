@@ -1466,26 +1466,6 @@ If ORDER is `nil`, defer BODY until orders have been processed."
                                          order
                                        (list 'quote order)))))))
 
-;;;###autoload
-(defmacro elpaca-use-package (order &rest body)
-  "Execute BODY in `use-package' declaration after ORDER is finished.
-If the :disabled keyword is present in body, the package is completely ignored.
-This happens regardless of the value associated with :disabled.
-The expansion is a string indicating the package has been disabled."
-  (declare (indent 1))
-  (if (memq :disabled body)
-      (format "%S :disabled by elpaca-use-package" order)
-    (let ((o order))
-      (when-let ((ensure (cl-position :ensure body)))
-        (setq o (if (null (nth (1+ ensure) body)) nil order)
-              body (append (cl-subseq body 0 ensure)
-                           (cl-subseq body (+ ensure 2)))))
-      `(elpaca ,o (use-package
-                    ,(if-let (((memq (car-safe order) '(quote \`)))
-                              (feature (flatten-tree order)))
-                         (cadr feature)
-                       (elpaca--first order))
-                    ,@body)))))
 
 (defvar elpaca--try-package-history nil "History for `elpaca-try'.")
 (declare-function elpaca-log--latest "elpaca-log")
