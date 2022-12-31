@@ -193,6 +193,7 @@ Each function is passed a request, which may be any of the follwoing symbols:
   "Update `elpaca--ibc' when `initial-buffer-choice' set to NEW."
   (unless (eq new #'elpaca--ibs) (setq elpaca--ibc new)))
 (add-variable-watcher 'initial-buffer-choice #'elpaca--set-ibc)
+(defvar elpaca--show-build elpaca-hide-initial-build "When non-nil show initial build.")
 
 (defcustom elpaca-verbosity 0 "Maximum event verbosity level shown in logs."
   :type 'integer)
@@ -568,7 +569,7 @@ Keys are as follows:
                   :log (list (list status nil info)))))
     (when mono-repo (cl-pushnew id (elpaca<-includes mono-repo)))
     (unless (or builtp elpaca-hide-initial-build elpaca-after-init-time)
-      (setq initial-buffer-choice #'elpaca--ibs elpaca-hide-initial-build t))
+      (setq initial-buffer-choice #'elpaca--ibs elpaca--show-build t))
     elpaca))
 
 (defsubst elpaca--status (e) "Return E's status." (car (elpaca<-statuses e)))
@@ -704,20 +705,19 @@ Accepted KEYS are :pre and :post which are hooks run around queue processing."
            do (condition-case-unless-debug err
                   (eval `(progn ,@body) t)
                 ((error) (warn "Package Config Error %s: %S" item err))))
+  (when-let ((post (elpaca-q<-post q))) (funcall post))
+  (run-hooks 'elpaca-post-queue-hook)
   (setf (elpaca-q<-status q) 'complete)
   (let ((next (nth (1+ (elpaca-q<-id q)) (reverse elpaca--queues))))
-    (if (and (null elpaca-after-init-time)
-             (eq (elpaca-q<-type q) 'init)
-             (or (null next)
-                 (not (eq (elpaca-q<-type next) 'init))))
-        (progn
-          (run-hooks 'elpaca-after-init-hook)
-          (setq elpaca-after-init-time (current-time))
-          (remove-variable-watcher 'initial-buffer-choice #'elpaca--set-ibc)
-          (elpaca-split-queue))
-      (when-let ((post (elpaca-q<-post q))) (funcall post))
-      (run-hooks 'elpaca-post-queue-hook)
-      (when next (elpaca--process-queue next)))))
+    (unless (or elpaca-after-init-time ; Already run.
+                elpaca--waiting ; Won't know if final queue until after waiting.
+                (not (eq (elpaca-q<-type q) 'init)) ; Already run.
+                (and next (eq (elpaca-q<-type next) 'init))) ; More init queues.
+      (elpaca-split-queue)
+      (remove-variable-watcher 'initial-buffer-choice #'elpaca--set-ibc)
+      (setq elpaca-after-init-time (current-time))
+      (run-hooks 'elpaca-after-init-hook))
+    (when next (elpaca--process-queue next))))
 
 (defun elpaca--finalize (e)
   "Declare E finished or failed."
@@ -1466,6 +1466,38 @@ If ORDER is `nil`, defer BODY until orders have been processed."
                                          order
                                        (list 'quote order)))))))
 
+(defcustom elpaca-wait-interval 0.01 "Seconds between `elpaca-wait' status checks."
+  :type 'number)
+
+;;;###autoload
+(defun elpaca-wait ()
+  "Block until current queues processed.
+When quit with \\[keyboard-quit], running sub-processes are not stopped."
+  (when-let ((q (cl-find-if (lambda (q) (and (eq (elpaca-q<-status q) 'incomplete)
+                                             (or (elpaca-q<-elpacas q) (elpaca-q<-forms q))))
+                            elpaca--queues)))
+    (setq elpaca--waiting t)
+    (unless (or elpaca-after-init-time (not elpaca--show-build))
+      (elpaca-log "#unique !finished")
+      (sit-for elpaca-wait-interval))
+    (let* ((processed (elpaca-q<-processed q))
+           (id (elpaca-q<-id q))
+           (previous -1)
+           (spec (apply #'substitute-command-keys
+                        (append (list (concat "waiting on queue " (number-to-string id)
+                                              "...%2.f%%. \\[keyboard-quit] to quit"))
+                                (unless (version< emacs-version "28.1") (list 'no-face))))))
+      (elpaca-process-queues)
+      (unwind-protect ;@TODO: Check for elpaca-after-init hook?
+          (while (not (eq (elpaca-q<-status q) 'complete))
+            (unless (= previous (setq processed (elpaca-q<-processed q)))
+              (message spec (* 100 (/ processed (float (length (elpaca-q<-elpacas q)))))))
+            (setq previous processed)
+            (discard-input)
+            (sit-for elpaca-wait-interval))
+        (elpaca-split-queue)
+        (message spec (* 100 (/ (elpaca-q<-processed q) (float (length (elpaca-q<-elpacas q))))))
+        (setq elpaca--waiting nil)))))
 
 (defvar elpaca--try-package-history nil "History for `elpaca-try'.")
 (declare-function elpaca-log--latest "elpaca-log")

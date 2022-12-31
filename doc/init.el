@@ -33,11 +33,16 @@
 
 ;; Install use-package
 (elpaca use-package
-  ;; Customize/Configure the package in the BODY of the macro.
-  (setq use-package-always-defer t))
+  ;; Enable :elpaca use-package keyword.
+  (elpaca-use-package-mode)
+  ;; Assume :elpaca t unless otherwise specified.
+  (setq elpaca-use-package-by-default t))
+
+;; Block until current queue processed.
+(elpaca-wait)
 
 ;; Expands to: (elpaca evil (use-package evil :demand t))
-(elpaca-use-package evil :demand t)
+(use-package evil :demand t)
 
 ;; Don't install anything. Defer execution of BODY
 (elpaca nil (message "deferred"))
