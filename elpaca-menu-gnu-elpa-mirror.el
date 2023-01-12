@@ -47,11 +47,17 @@
   "Clone GNU ELPA recipes repo to PATH."
   (message "Downloading GNU ELPA recipes...")
   (let ((default-directory user-emacs-directory))
+    (unless (file-exists-p elpaca-menu-gnu-elpa-mirror-path)
+      (make-directory elpaca-menu-gnu-elpa-mirror-path 'parents))
     (elpaca-with-process
         (elpaca-process-call "git" "clone" "--depth=1"
                              elpaca-menu-gnu-elpa-mirror-address
                              elpaca-menu-gnu-elpa-mirror-path)
-      (message "%s" (if success "GNU ELPA recipes downloaded." stderr)))))
+      (message "%s" (if success "GNU ELPA recipes downloaded."
+                      (error "GNU ELPA MENU ERROR: %S"
+                             (list result
+                                   elpaca-menu-gnu-elpa-mirror-address
+                                   elpaca-menu-gnu-elpa-mirror-path)))))))
 
 (defun elpaca-menu-gnu-elpa-mirror--update ()
   "Update recipes in GNU ELPA menu."
