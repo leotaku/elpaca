@@ -719,6 +719,8 @@ Accepted KEYS are :pre and :post which are hooks run around queue processing."
       (run-hooks 'elpaca-post-queue-hook)
       (when next (elpaca--process-queue next)))))
 
+(defcustom elpaca-batch-limit 8 "Number of packages to process at once." :type 'integer)
+(defvar elpaca--batch-outstanding 0 "Number of packages currently processing.")
 (defun elpaca--finalize (e)
   "Declare E finished or failed."
   (let ((status (elpaca--status e)))
@@ -732,9 +734,12 @@ Accepted KEYS are :pre and :post which are hooks run around queue processing."
         (elpaca--signal
          e (concat  "✓ " (format-time-string "%s.%3N" (elpaca--log-duration e)) " secs")
          'finished))
-      (when-let ((q (car (last elpaca--queues (1+ (elpaca<-queue-id e)))))
-                 ((= (cl-incf (elpaca-q<-processed q)) (length (elpaca-q<-elpacas q)))))
-        (elpaca--finalize-queue q)))))
+      (cl-decf elpaca--batch-outstanding)
+      (if-let ((q (car (last elpaca--queues (1+ (elpaca<-queue-id e)))))
+               (elpacas (elpaca-q<-elpacas q))
+               ((= (cl-incf (elpaca-q<-processed q)) (length elpacas))))
+          (elpaca--finalize-queue q)
+        (elpaca--process-batch elpacas q)))))
 
 (defun elpaca--queue (item)
   "Queue (ITEM . e) in `elpaca--queued'. Return e."
@@ -1532,14 +1537,25 @@ When INTERACTIVE is non-nil, immediately process ORDER, otherwise queue ORDER."
 (defun elpaca--process (queued)
   "Process QUEUED elpaca."
   (let ((e (cdr queued)))
-    (unless (memq (elpaca--status e) '(failed blocked finished)) (elpaca--continue-build e))))
+    (unless (memq (elpaca--status e) '(failed blocked finished))
+      (elpaca--continue-build e))))
 
-(defun elpaca--process-queue (q)
-  "Process elpacas in Q."
-  (when-let ((pre (elpaca-q<-pre q))) (funcall pre))
-  (if (and (not (elpaca-q<-elpacas q)) (elpaca-q<-forms q))
-      (elpaca--finalize-queue q)
-    (mapc #'elpaca--process (reverse (elpaca-q<-elpacas q)))))
+(defun elpaca--process-batch (elpacas q)
+  "Process next batch of Q's ELPACAS."
+  (when-let  ((processed (elpaca-q<-processed q))
+              ((< (+ elpaca--batch-outstanding processed) (length elpacas)))
+              ((< elpaca--batch-outstanding elpaca-batch-limit))
+              (start (- (+ processed elpaca--batch-outstanding))))
+    (let ((batch (ignore-errors (cl-subseq elpacas 0 (and (< start 0) start)))))
+      (setq elpaca--batch-outstanding (length batch))
+      (mapc #'elpaca--process (reverse batch)))))
+
+(defun elpaca--process-queue (q &optional pre)
+  "Process elpacas in Q. If PRE is non-nil, call queue's :pre forms."
+  (when-let ((pre) (fn (elpaca-q<-pre q))) (funcall fn))
+  (if-let ((elpacas (elpaca-q<-elpacas q)))
+      (elpaca--process-batch elpacas q)
+    (elpaca--finalize-queue q)))
 
 ;;;###autoload
 (defun elpaca-process-queues (&optional filter)
