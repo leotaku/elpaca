@@ -386,7 +386,7 @@ If QUERY is nil, the contents of the minibuffer are used instead."
         (setq tabulated-list-entries (funcall (byte-compile fn))
               elpaca-ui-search-filter query))
       (elpaca-ui--print)
-      (when elpaca-ui-header-line-function
+      (when (and elpaca-ui-header-line-function (derived-mode-p 'elpaca-ui-mode))
         (setq header-line-format (funcall elpaca-ui-header-line-function
                                           elpaca-ui-header-line-prefix))))))
 
