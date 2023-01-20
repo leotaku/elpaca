@@ -560,8 +560,13 @@ Keys are as follows:
          (builtp (and clonedp (and build-dir (file-exists-p build-dir))))
          (mono-repo (or mono-repo
                         (when-let (((not builtp))
-                                   (e (elpaca--mono-repo id repo-dir)))
-                          (setq status 'blocked info (concat "Waiting on monorepo " repo-dir))
+                                   (e (elpaca--mono-repo id repo-dir))
+                                   (statuses (elpaca<-statuses e)))
+                          (unless (or (member 'finished statuses)
+                                      (member 'ref-checked-out statuses)
+                                      (member 'queueing-deps statuses))
+                            (setq status 'blocked info
+                                  (concat "Waiting on monorepo " repo-dir)))
                           e)))
          (build-steps (elpaca--build-steps recipe builtp clonedp mono-repo))
          (elpaca (elpaca<--create
@@ -1162,12 +1167,11 @@ If FORCE is non-nil, do not use cached dependencies."
                           (unless (memq e-id (elpaca<-dependents d))
                             (push e-id (elpaca<-dependents d)))
                           (unless found
-                            (if included
-                                ;; Unblock dependency published in same repo...
-                                (when blocked
-                                  (elpaca--signal d nil 'unblocked-mono-repo)
-                                  (elpaca--clone-dependencies d))
-                              (unless blocked (elpaca--continue-build d))))
+                            (if (not (or included blocked))
+                                (elpaca--continue-build d)
+                              ;; Unblock dependency published in same repo...
+                              (when blocked (elpaca--signal d nil 'unblocked-mono-repo))
+                              (elpaca--clone-dependencies d)))
                           count (and found (eq (elpaca--status found) 'finished))))
           (elpaca--continue-build e)))
     (elpaca--signal e "No external dependencies detected")
