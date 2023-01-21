@@ -121,6 +121,7 @@ It then builds and activates Elpaca.
   (condition-case-unless-debug err
       (if-let ((buffer (pop-to-buffer-same-window "*elpaca-bootstrap*"))
                ((zerop (call-process "git" nil buffer t "clone"
+                                     "--depth" "1" "--no-single-branch"
                                      (plist-get order :repo) repo)))
                (default-directory repo)
                ((zerop (call-process "git" nil buffer t "checkout"
@@ -876,5 +877,5 @@ For example, the following search tag will embolden the first column of the @sam
 (cl-pushnew (cons 'bold-names #'+elpaca-bold-names) elpaca-ui-search-tags)
 @end lisp
 
-Emacs 30.0.50 (Org mode 9.6)
+Emacs 30.0.50 (Org mode 9.6.1)
 @bye

@@ -13,6 +13,7 @@
   (condition-case-unless-debug err
       (if-let ((buffer (pop-to-buffer-same-window "*elpaca-bootstrap*"))
                ((zerop (call-process "git" nil buffer t "clone"
+                                     "--depth" "1" "--no-single-branch"
                                      (plist-get order :repo) repo)))
                (default-directory repo)
                ((zerop (call-process "git" nil buffer t "checkout"
