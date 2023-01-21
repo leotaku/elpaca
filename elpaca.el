@@ -478,7 +478,7 @@ Type is `local' for a local filesystem path, `remote' for a remote URL, or nil."
 
 (cl-defstruct (elpaca< (:constructor elpaca<--create) (:type list) (:named))
   "Order for queued processing."
-  id package item statuses
+  id lock package item statuses
   repo-dir build-dir mono-repo
   files build-steps recipe includes
   dependencies dependents -dependencies
@@ -1261,6 +1261,7 @@ Kick off next build step, and/or change E's status."
         (raw (process-get process :raw-output)))
     (if (and (string-match-p "fatal" raw) (not (string-match-p "already exists" raw)))
         (elpaca--fail e (nth 2 (car (elpaca<-log e))))
+      (setf (elpaca<-lock e) nil)
       (elpaca--continue-build e))))
 
 (defun elpaca--remote (remotes)
