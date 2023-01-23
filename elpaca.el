@@ -1913,6 +1913,21 @@ When BUILD is non-nil visit ITEM's build directory."
                                         '(:protocol https)))))))
       (browse-url url)))
 
+(defun elpaca--vars ()
+  "Return a list of Elpaca variables and their values."
+  (let ((excludes "\\(hook\\|functions\\|map\\|-table\\|tags\\|--\\)")
+        vars)
+    (mapatoms (lambda (v)
+                (when-let (((boundp v))
+                           (name (symbol-name v))
+                           ((string-match-p "\\`elpaca" name))
+                           ((not (string-match-p excludes name)))
+                           ((and (get v 'custom-type) (get v 'standard-value)
+                                 (not (equal (symbol-value v)
+                                             (eval (car (get v 'standard-value)) t))))))
+                  (push (concat name ": " (pp-to-string (symbol-value v))) vars))))
+    vars))
+
 ;;;###autoload
 (defun elpaca-version (&optional message)
   "Return elpaca version information string.
