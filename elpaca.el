@@ -670,9 +670,9 @@ If REPLACE is non-nil, the most recent log entry is replaced."
     (elpaca--remove-build-steps e '(elpaca--clone elpaca--configure-remotes elpaca--checkout-ref))
     (elpaca--signal e nil 'ref-checked-out)
     (elpaca--signal e nil 'unblocked-mono-repo)
-    (message "BULID STEPS @ MONO-REPO CONT: %S" (elpaca<-build-steps e))
-    (message "RECIPE: %S" (elpaca<-recipe e))
-    (message "REPO: %S" (directory-files (elpaca<-repo-dir e) 'full))
+    ;; (message "BULID STEPS @ MONO-REPO CONT: %S" (elpaca<-build-steps e))
+    ;; (message "RECIPE: %S" (elpaca<-recipe e))
+    ;; (message "REPO: %S" (directory-files (elpaca<-repo-dir e) 'full))
     (elpaca--continue-build e)))
 
 (defun elpaca--log-duration (e)
